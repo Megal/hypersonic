@@ -12,7 +12,7 @@ char grid[11][14];
 namespace GridItem {
 	enum : char {
 		empty = '.',
-		box = '0',
+		boxNoItems = '0',
 	};
 };
 
@@ -74,7 +74,7 @@ void loadGrid()
 	for( int i = 0; i < H; ++i ) {
 		for( int j = 0; j < W; ++j ) {
 			char item = grid[i][j];
-			assert( item == GridItem::box || item == GridItem::empty );
+			assert( item == GridItem::empty || (item >= '0' && item <= '9') );
 		}
 	}
 }
@@ -83,12 +83,24 @@ struct Entity {
 	enum EntityType: int {
 		EntityType_player = 0,
 		EntityType_bomb = 1,
+		EntityType_item = 2,
 	};
 	int entityType;
 	int owner;
 	int2d pos;
-	int param1, param2;
+	union {
+		int param1;
+		int bombsRemains;
+		int detonationCountdown;
+	};
+	union {
+		int param2;
+		int explosionRange;
+	};
 };
+
+bool boxWillBeDestroyed(int2d box, const vector<Entity>& entities)
+;
 
 vector<Entity> loadEntities()
 {
@@ -99,7 +111,7 @@ vector<Entity> loadEntities()
 	for( int i = 0; i < entityCount; ++i ) {
 		Entity entity;
 		cin >> entity.entityType >> entity.owner >> entity.pos >> entity.param1 >> entity.param2;
-		assert( entity.entityType == Entity::EntityType_player || entity.entityType == Entity::EntityType_bomb );
+		assert( entity.entityType == Entity::EntityType_player || entity.entityType == Entity::EntityType_bomb || entity.entityType == Entity::EntityType_item );
 
 		loaded.push_back(entity);
 	}
@@ -121,20 +133,27 @@ Entity findPlayer(const vector<Entity>& entities)
 	assert(false && "should find player");
 }
 
-int2d nearestBox(const Entity& player)
+
+int2d nearestBox(const Entity& player, const vector<Entity>& entities)
 {
+	// TODO: also prefer boxes with items
 	int2d bestBox;
 	int bestLength = 999;
 
 	for( int y = 0; y < H; ++y ) {
 		for( int x = 0; x < W; ++x ) {
-			if( grid[y][x] != GridItem::box ) {
+			if( grid[y][x] == GridItem::empty ) {
 				continue;
 			}
 
-			int length = abs(player.pos.x - x) + abs(player.pos.y - y);
+			auto box = int2d(x, y);
+			if( boxWillBeDestroyed(box, entities) ) {
+				continue;
+			}
+
+			int length = abs(player.pos.x - box.x) + abs(player.pos.y - box.y);
 			if( length < bestLength ) {
-				bestBox = int2d(x, y);
+				bestBox = box;
 				bestLength = length;
 			}
 		}
@@ -143,29 +162,97 @@ int2d nearestBox(const Entity& player)
 	return bestBox;
 }
 
-bool canBombBoxes(const Entity& player)
+
+bool canBombBoxes(const Entity& player, const vector<Entity>& entities)
 {
 	static int dx[4] = {-1, 0, 1, 0};
 	static int dy[4] = {0, 1, 0, -1};
 
-	for( int r = 1; r <= 2; ++r ) {
-		for( int k = 0; k < 4; ++k ) {
+	for( int k = 0; k < 4; ++k ) {
+		for( int r = 1; r < player.explosionRange; ++r ) {
 			auto x = player.pos.x + r*dx[k];
 			auto y = player.pos.y + r*dy[k];
 			auto pos = int2d(x, y);
 
 			if( !pos.isOnGrid() ) {
+				break;
+			}
+			if( grid[y][x] == GridItem::empty ) {
 				continue;
 			}
-			if( grid[y][x] == GridItem::box )
-			{
+
+			if( !boxWillBeDestroyed(pos, entities) ){
 				return true;
 			}
 		}
 	}
 
 	return false;
-};
+}
+
+
+bool boxWillBeDestroyed(int2d box, const vector<Entity>& entities)
+{
+	assert( box.isOnGrid() );
+	assert( grid[box.y][box.x] <= '9' && grid[box.y][box.x] >= '0' );
+
+	for( const auto& bomb : entities ) {
+		if( bomb.entityType != Entity::EntityType_bomb ) {
+			continue;
+		}
+
+		// TODO check if there any obstacles in between box and bomb
+		if( bomb.pos.x == box.x ) {
+			if( abs(bomb.pos.y - box.y) < bomb.explosionRange ) {
+				return true;
+			}
+		}
+		else if( bomb.pos.y == box.y ) {
+			if( abs(bomb.pos.x - box.x) < bomb.explosionRange ) {
+				return true;
+			}
+		}
+	}
+
+	return false;
+}
+
+
+int countItemsOnGrid(const vector<Entity>& entities)
+{
+	int count = 0;
+
+	for( const auto& entity : entities ) {
+		if( entity.entityType == Entity::EntityType_item ) {
+			++count;
+		}
+	}
+
+	return count;
+}
+
+
+int2d nearestItem(const Entity& player, const vector<Entity>& entities)
+{
+	assert( countItemsOnGrid(entities) > 0 );
+
+	int2d bestItem;
+	int bestLength = 999;
+
+	for( const auto& item : entities ) {
+		if( item.entityType != Entity::EntityType_item ) {
+			continue;
+		}
+		int length = abs(player.pos.x - item.pos.x) + abs(player.pos.y - item.pos.y);
+		if( length < bestLength ) {
+			bestItem = item.pos;
+			bestLength = length;
+		}
+	}
+
+	return bestItem;
+}
+
 
 int main()
 {
@@ -176,9 +263,16 @@ int main()
 		loadGrid();
 		auto entities = loadEntities();
 		auto player = findPlayer(entities);
-		auto gotoBox = nearestBox(player);
+		int2d gotoBox;
+		if( countItemsOnGrid(entities) > 0 ) {
+			gotoBox = nearestItem(player, entities);
+		}
+		else {
+			gotoBox = nearestBox(player, entities);
+		}
 
-		if( canBombBoxes(player) ) {
+
+		if( canBombBoxes(player, entities) ) {
 			printf("BOMB %d %d\n", gotoBox.x, gotoBox.y);
 		}
 		else {
