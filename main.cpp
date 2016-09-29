@@ -1,6 +1,7 @@
 #include <iostream>
 #include <cassert>
 #include <vector>
+#include <map>
 
 using namespace std;
 
@@ -8,12 +9,17 @@ using namespace std;
 
 int W, H;
 int myId;
-char grid[11][14];
-namespace GridItem {
-	enum : char {
-		empty = '.',
-		boxNoItems = '0',
-	};
+const size_t HeightOfTheWorld	= 11;
+const size_t WidthOfTheWorld	= 13;
+char grid[HeightOfTheWorld][WidthOfTheWorld+1];
+namespace Grid {
+	bool isBox(const char c) { return c >= '0' && c <= '9'; }
+	bool isEmpty(const char c) { return c == '.'; }
+	bool isWall(const char c) { return c == 'X'; }
+	bool isValid(const char c)
+	{
+		return isBox(c) || isEmpty(c) || isWall(c);
+	}
 };
 
 #pragma mark - Read from file
@@ -26,6 +32,8 @@ bool readStdinFromFile(const char *filename)
 }
 
 #pragma mark - Math helpers
+
+using uint = unsigned int;
 
 struct int2d{
 	int x, y;
@@ -50,6 +58,7 @@ struct int2d{
 	};
 };
 
+
 std::istream& operator>>(std::istream& is, int2d& object) {
 	is >> object.x >> object.y;
 
@@ -61,8 +70,8 @@ std::istream& operator>>(std::istream& is, int2d& object) {
 void loadInit()
 {
 	cin >> W >> H >> myId;
-	assert(W == 13);
-	assert(H == 11);
+	assert(W == WidthOfTheWorld);
+	assert(H == HeightOfTheWorld);
 }
 
 void loadGrid()
@@ -74,7 +83,7 @@ void loadGrid()
 	for( int i = 0; i < H; ++i ) {
 		for( int j = 0; j < W; ++j ) {
 			char item = grid[i][j];
-			assert( item == GridItem::empty || (item >= '0' && item <= '9') );
+			assert( Grid::isValid(item) );
 		}
 	}
 }
@@ -99,8 +108,51 @@ struct Entity {
 	};
 };
 
-bool boxWillBeDestroyed(int2d box, const vector<Entity>& entities)
-;
+struct EntityEx {
+	enum EntityExType: uint {
+		EntityExType_unknown = 0, // should not be used
+		EntityExType_player,
+		EntityExType_bomb,
+		EntityExType_wall,
+		EntityExType_item,
+	};
+	uint type;
+
+	enum Traits: uint {
+		Traits_impassable		= 1 << 0,
+		Traits_destuctable		= 1 << 1,
+		Traits_absorbsExplosion	= 1 << 2,
+		Traits_chainDetonation	= 1 << 3,
+		Traits_dropsItem		= 1 << 4,
+	};
+	uint flags;
+
+	union {
+		int param0;
+		int owner;
+	};
+
+	union {
+		int param1;
+	};
+
+	union {
+		int param2;
+	};
+
+	using params_key_t = std::string;
+	using params_value_t = vector<int>;
+	using params_container_t = std::map<params_key_t, params_value_t>;
+	params_container_t otherParams;
+};
+
+struct World {
+	EntityEx grid[HeightOfTheWorld][WidthOfTheWorld];
+
+};
+
+bool boxWillBeDestroyed(int2d box, const vector<Entity>& entities);
+
 
 vector<Entity> loadEntities()
 {
@@ -142,7 +194,8 @@ int2d nearestBox(const Entity& player, const vector<Entity>& entities)
 
 	for( int y = 0; y < H; ++y ) {
 		for( int x = 0; x < W; ++x ) {
-			if( grid[y][x] == GridItem::empty ) {
+			auto c = grid[y][x];
+			if( !Grid::isBox(c) ) {
 				continue;
 			}
 
@@ -177,8 +230,13 @@ bool canBombBoxes(const Entity& player, const vector<Entity>& entities)
 			if( !pos.isOnGrid() ) {
 				break;
 			}
-			if( grid[y][x] == GridItem::empty ) {
+
+			auto c = grid[y][x];
+			if( Grid::isEmpty(c) ) {
 				continue;
+			}
+			else if( !Grid::isBox(c) ) {
+				break;
 			}
 
 			if( !boxWillBeDestroyed(pos, entities) ){
@@ -194,7 +252,8 @@ bool canBombBoxes(const Entity& player, const vector<Entity>& entities)
 bool boxWillBeDestroyed(int2d box, const vector<Entity>& entities)
 {
 	assert( box.isOnGrid() );
-	assert( grid[box.y][box.x] <= '9' && grid[box.y][box.x] >= '0' );
+	auto c = grid[box.y][box.x];
+	assert( Grid::isBox(c) );
 
 	for( const auto& bomb : entities ) {
 		if( bomb.entityType != Entity::EntityType_bomb ) {
