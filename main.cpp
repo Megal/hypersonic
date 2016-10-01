@@ -37,8 +37,7 @@ using uint = unsigned int;
 
 struct int2d{
 	int x, y;
-	int2d(const int& x, const int &y): x(x), y(y) {}
-	int2d(): x(0), y(0) {}
+
 	bool isOnGrid() {
 		if( x < 0 ) {
 			return false;
@@ -65,6 +64,7 @@ std::istream& operator>>(std::istream& is, int2d& object) {
 	return is;
 }
 
+
 #pragma mark - Read game input
 
 void loadInit()
@@ -73,6 +73,7 @@ void loadInit()
 	assert(W == WidthOfTheWorld);
 	assert(H == HeightOfTheWorld);
 }
+
 
 void loadGrid()
 {
@@ -88,6 +89,7 @@ void loadGrid()
 	}
 }
 
+
 struct Entity {
 	enum EntityType: int {
 		EntityType_player = 0,
@@ -95,12 +97,20 @@ struct Entity {
 		EntityType_item = 2,
 	};
 	int entityType;
+
 	int owner;
 	int2d pos;
+
+
+	enum ItemType: int {
+		ItemType_extraRange	= 1,
+		ItemType_extraBomb	= 2,
+	};
 	union {
 		int param1;
 		int bombsRemains;
 		int detonationCountdown;
+		int itemType;
 	};
 	union {
 		int param2;
@@ -110,8 +120,9 @@ struct Entity {
 
 struct EntityEx {
 	enum EntityExType: uint {
-		EntityExType_unknown = 0, // should not be used
+		EntityExType_empty = 0,
 		EntityExType_player,
+		EntityExType_box,
 		EntityExType_bomb,
 		EntityExType_wall,
 		EntityExType_item,
@@ -119,11 +130,11 @@ struct EntityEx {
 	uint type;
 
 	enum Traits: uint {
-		Traits_impassable		= 1 << 0,
-		Traits_destuctable		= 1 << 1,
-		Traits_absorbsExplosion	= 1 << 2,
-		Traits_chainDetonation	= 1 << 3,
-		Traits_dropsItem		= 1 << 4,
+		Traits_impassable		= 1 << 0, // Player cannot walkthrough, unless already stays there
+		Traits_destuctable		= 1 << 1, // Will disappear from field if explosion will hit it
+		Traits_absorbsExplosion	= 1 << 2, // Stops further explosion spreading
+		Traits_chainDetonation	= 1 << 3, // Will detonate immediately if explosion hit it
+		Traits_containedInBox	= 1 << 4, // Explosion will not affect it if there is other entity, such a box, the in same position
 	};
 	uint flags;
 
@@ -132,23 +143,179 @@ struct EntityEx {
 		int owner;
 	};
 
+	enum ItemType: int {
+		ItemType_extraRange	= 1,
+		ItemType_extraBomb	= 2,
+	};
 	union {
 		int param1;
+		int itemType;
 	};
 
 	union {
 		int param2;
 	};
-
-	using params_key_t = std::string;
-	using params_value_t = vector<int>;
-	using params_container_t = std::map<params_key_t, params_value_t>;
-	params_container_t otherParams;
 };
 
-struct World {
-	EntityEx grid[HeightOfTheWorld][WidthOfTheWorld];
 
+struct World {
+	using container_t = vector<EntityEx>;
+	container_t grid[HeightOfTheWorld][WidthOfTheWorld];
+
+	void updateWithGrid(const char *bytegrid, size_t height, size_t width)
+	{
+		assert( height >= HeightOfTheWorld );
+		assert( height >= WidthOfTheWorld );
+
+		for( int i = 0; i < HeightOfTheWorld; ++i ) {
+			for( int j = 0; j < WidthOfTheWorld; ++j ) {
+				auto c = bytegrid[i*height + j];
+				assert( Grid::isValid(c) );
+
+				updateWithChar({i, j}, c);
+			}
+		}
+	}
+
+	void updateWithEntities(const vector<Entity>& entities) {
+		for( const auto& entity: entities ) {
+			updateWithEntity(entity);
+		}
+	}
+
+
+private:
+	void update(const int2d& pos, const EntityEx& entity)
+	{
+		auto list = grid[pos.y][pos.x];
+
+		list.push_back(entity);
+		assert(list.size() < 10);
+	}
+
+
+	void updateWithEntity(const Entity& entity)
+	{
+		switch( entity.entityType ) {
+			case Entity::EntityType_player:
+				updateWithPlayer(entity);
+				break;
+
+			case Entity::EntityType_bomb:
+				updateWithBomb(entity);
+				break;
+
+			case Entity::EntityType_item:
+				updateWithItem(entity.pos, entity.itemType);
+				break;
+
+			default:
+				assert( false && "unexpected entityType" );
+				break;
+		}
+	}
+
+
+	void updateWithChar(const int2d& pos, const char c)
+	{
+		assert( Grid::isValid(c) );
+		assert( !Grid::isEmpty(c) );
+
+		if( Grid::isBox(c) ) {
+			updateWithBox(pos);
+
+			int itemValue = c - '0';
+			if( itemValue ) {
+				updateWithItem(pos, itemValue);
+			}
+		}
+		else if( Grid::isWall(c) ) {
+			updateWithWall(pos);
+		}
+		else {
+			assert( false && "cannot interpret character" );
+		}
+	}
+
+
+	void updateWithPlayer(const Entity &entityPlayer)
+	{
+		EntityEx player;
+
+		prepareUpgradeFromEntity(player, entityPlayer);
+		player.type = EntityEx::EntityExType_player;
+		player.flags = 0;
+		player.flags |= EntityEx::Traits_destuctable;
+
+		update(entityPlayer.pos, player);
+	}
+
+
+	void updateWithBomb(const Entity &entityBomb)
+	{
+		EntityEx bomb;
+
+		prepareUpgradeFromEntity(bomb, entityBomb);
+		bomb.type = EntityEx::EntityExType_bomb;
+		bomb.flags = 0;
+		bomb.flags |= EntityEx::Traits_impassable;
+		bomb.flags |= EntityEx::Traits_destuctable;
+		bomb.flags |= EntityEx::Traits_chainDetonation;
+
+		update(entityBomb.pos, bomb);
+	}
+
+
+	void prepareUpgradeFromEntity(EntityEx &target, const Entity &source)
+	{
+		target.param0 = source.owner;
+		target.param1 = source.param1;
+		target.param2 = source.param2;
+	}
+
+
+	void updateWithBox(const int2d& pos)
+	{
+		EntityEx box;
+
+		box.type = EntityEx::EntityExType_box;
+		box.flags = 0;
+		box.flags |= EntityEx::Traits_impassable;
+		box.flags |= EntityEx::Traits_absorbsExplosion;
+		box.flags |= EntityEx::Traits_destuctable;
+
+		update(pos, box);
+	}
+
+
+	void updateWithItem(const int2d& pos, int itemValue)
+	{
+		EntityEx item;
+
+		item.type = EntityEx::EntityExType_item;
+		item.flags = 0;
+		item.flags |= EntityEx::Traits_destuctable;
+		item.flags |= EntityEx::Traits_absorbsExplosion;
+		item.flags |= EntityEx::Traits_containedInBox;
+		item.itemType = itemValue;
+
+		assert( item.itemType == EntityEx::ItemType_extraRange || item.itemType == EntityEx::ItemType_extraBomb );
+
+		update(pos, item);
+	}
+
+
+	void updateWithWall(int2d pos)
+	{
+		EntityEx wall;
+
+		wall.type = EntityEx::EntityExType_wall;
+		wall.flags = 0;
+		wall.flags |= EntityEx::Traits_impassable;
+		wall.flags |= EntityEx::Traits_absorbsExplosion;
+
+		update(pos, wall);
+	}
 };
 
 bool boxWillBeDestroyed(int2d box, const vector<Entity>& entities);
@@ -170,6 +337,7 @@ vector<Entity> loadEntities()
 
 	return loaded;
 }
+
 
 Entity findPlayer(const vector<Entity>& entities)
 {
@@ -199,7 +367,7 @@ int2d nearestBox(const Entity& player, const vector<Entity>& entities)
 				continue;
 			}
 
-			auto box = int2d(x, y);
+			int2d box = {x, y};
 			if( boxWillBeDestroyed(box, entities) ) {
 				continue;
 			}
@@ -225,7 +393,7 @@ bool canBombBoxes(const Entity& player, const vector<Entity>& entities)
 		for( int r = 1; r < player.explosionRange; ++r ) {
 			auto x = player.pos.x + r*dx[k];
 			auto y = player.pos.y + r*dy[k];
-			auto pos = int2d(x, y);
+			int2d pos = {x, y};
 
 			if( !pos.isOnGrid() ) {
 				break;
