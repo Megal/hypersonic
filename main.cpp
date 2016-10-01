@@ -2,6 +2,7 @@
 #include <cassert>
 #include <vector>
 #include <map>
+#include <sstream>
 
 using namespace std;
 
@@ -165,14 +166,16 @@ struct World {
 	void updateWithGrid(const char *bytegrid, size_t height, size_t width)
 	{
 		assert( height >= HeightOfTheWorld );
-		assert( height >= WidthOfTheWorld );
+		assert( width >= WidthOfTheWorld );
 
 		for( int i = 0; i < HeightOfTheWorld; ++i ) {
 			for( int j = 0; j < WidthOfTheWorld; ++j ) {
-				auto c = bytegrid[i*height + j];
+				auto c = bytegrid[i*width + j];
 				assert( Grid::isValid(c) );
 
-				updateWithChar({i, j}, c);
+				if( !Grid::isEmpty(c) ) {
+					updateWithChar( {j, i}, c );
+				}
 			}
 		}
 	}
@@ -184,6 +187,19 @@ struct World {
 	}
 
 
+	int count()
+	{
+		int count = 0;
+
+		for( int i = 0; i < HeightOfTheWorld; ++i ) {
+			for( int j = 0; j < WidthOfTheWorld; ++j ) {
+				const auto& list = grid[i][j];
+				count += list.size();
+			}
+		}
+
+		return  count;
+	}
 private:
 	void update(const int2d& pos, const EntityEx& entity)
 	{
@@ -330,6 +346,31 @@ vector<Entity> loadEntities()
 	for( int i = 0; i < entityCount; ++i ) {
 		Entity entity;
 		cin >> entity.entityType >> entity.owner >> entity.pos >> entity.param1 >> entity.param2;
+		assert( entity.entityType == Entity::EntityType_player || entity.entityType == Entity::EntityType_bomb || entity.entityType == Entity::EntityType_item );
+
+		loaded.push_back(entity);
+	}
+
+	return loaded;
+}
+
+
+vector<Entity> loadEntitiesAndLog(std::stringstream& log)
+{
+	int entityCount;
+	cin >> entityCount;
+
+	vector<Entity> loaded;
+	for( int i = 0; i < entityCount; ++i ) {
+		Entity entity;
+		string line;
+		while( line.length() == 0 ) {
+			getline(cin, line);
+		}
+		log << line << " ";
+		stringstream ss(line);
+
+		ss >> entity.entityType >> entity.owner >> entity.pos >> entity.param1 >> entity.param2;
 		assert( entity.entityType == Entity::EntityType_player || entity.entityType == Entity::EntityType_bomb || entity.entityType == Entity::EntityType_item );
 
 		loaded.push_back(entity);
@@ -488,8 +529,16 @@ int main()
 
 	for( int turn = 0; turn < 200; ++turn ) {
 		loadGrid();
-		auto entities = loadEntities();
+		stringstream logstream;
+		auto entities = loadEntitiesAndLog(logstream);
+		string logstring; getline(logstream, logstring);
 		auto player = findPlayer(entities);
+
+		World theWorld;
+		theWorld.updateWithGrid(&grid[0][0], HeightOfTheWorld, WidthOfTheWorld+1);
+		theWorld.updateWithEntities(entities);
+		auto count = theWorld.count();
+
 		int2d gotoBox;
 		if( countItemsOnGrid(entities) > 0 ) {
 			gotoBox = nearestItem(player, entities);
@@ -500,10 +549,10 @@ int main()
 
 
 		if( canBombBoxes(player, entities) ) {
-			printf("BOMB %d %d\n", gotoBox.x, gotoBox.y);
+			printf("BOMB %d %d count=%d log=%s\n", gotoBox.x, gotoBox.y, count, logstring.c_str());
 		}
 		else {
-			printf("MOVE %d %d\n", gotoBox.x, gotoBox.y);
+			printf("MOVE %d %d count=%d log=%s\n", gotoBox.x, gotoBox.y, count, logstring.c_str());
 		}
 	}
 
